@@ -117,11 +117,16 @@ class HianimeExtractor:
         )
 
     def run(self):
-        anime: Anime | None = (  # type: ignore
-            self.get_anime_from_link(self.link)
-            if self.link
-            else (self.get_anime(self.name) if self.name else self.get_anime())
-        )
+        # Determine how to get the Anime object:
+        if self.link:
+            # If a direct link is provided, fetch anime from the link
+            anime: Anime | None = self.get_anime_from_link(self.link)
+        elif self.name:
+            # If a name is provided, search for the anime by name
+            anime: Anime | None = self.get_anime(self.name)
+        else:
+            # Otherwise, prompt the user to enter the anime name
+            anime: Anime | None = self.get_anime()
 
         if not anime:
             return
