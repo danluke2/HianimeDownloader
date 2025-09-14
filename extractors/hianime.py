@@ -158,6 +158,10 @@ class HianimeExtractor:
             print("Sub episodes are not available. Defaulting to dub.")
             anime.download_type = "dub"
 
+        # if dub is chosen, ask if subtitles are wanted
+        if anime.download_type == "dub" and not self.args.no_subtitles:
+            self.args.no_subtitles = input(f"{Fore.LIGHTCYAN_EX}Do you want to download subtitles for the dub? (y/n):{Fore.LIGHTYELLOW_EX} ").strip().lower() == "n"
+
         number_of_episodes = getattr(anime, f"{anime.download_type}_episodes")
         if number_of_episodes != 1:
             start_ep = get_int_in_range(
