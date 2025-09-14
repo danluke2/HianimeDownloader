@@ -292,6 +292,8 @@ class HianimeExtractor:
             time.sleep(10)
         print(f"\n\n{Fore.LIGHTGREEN_EX}All downloads completed!\n")
 
+        self.write_anime_json(folder, anime, episode_list)
+
 
     #function to create anime folder for storing downloads
     def create_anime_folder(self, anime: Anime) -> str:
