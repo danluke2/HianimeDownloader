@@ -96,7 +96,8 @@ class HianimeExtractor:
             "slo",
             "ukr",
         ]
-        self.DOWNLOAD_REFRESH: tuple[int, int] = (15, 30)
+        self.DOWNLOAD_REFRESH: tuple[int, int, int] = (15, 30, 45)
+        self.SERVER_REFRESH: tuple[int, int, int] = (7, 22, 37, 52)
         self.BAD_TITLE_CHARS: list[str] = [
             "-",
             ".",
@@ -230,7 +231,7 @@ class HianimeExtractor:
                 self.driver.requests.clear()
                 self.driver.get(url)
                 self.driver.execute_script("window.focus();")
-                media_requests = self.capture_media_requests()
+                media_requests = self.capture_media_requests(anime)
                 if not media_requests:
                     print("No m3u8 file was found skipping download")
                     continue
@@ -500,6 +501,23 @@ class HianimeExtractor:
         print(f"{Fore.LIGHTRED_EX}No matching server button could be found")
         return None
 
+    # function to click the server button in attempt to fix a stalled episode capture
+    def click_server_button(self, anime: Anime) -> None:
+        print(f"{Fore.LIGHTRED_EX}\nClicking server button...")
+        options = self.get_server_options(anime.download_type)
+        selection = self.args.server
+
+        for option in options:
+            if option.text == selection:
+                button: WebElement = option
+                try:
+                    button.click()
+                except Exception as e:
+                    print(
+                        f"{Fore.LIGHTRED_EX}Error clicking server button:\n\n{Fore.LIGHTWHITE_EX}{e}"
+                    )
+                    input("Please manually click the button and then press Enter to continue...")
+
     def get_episode_urls(
         self, page: str, start_episode: int, end_episode: int
     ) -> list[dict[str, Any]]:
@@ -521,7 +539,7 @@ class HianimeExtractor:
                 episodes.append(episode_info)
         return episodes
 
-    def capture_media_requests(self) -> dict[str, str] | None:
+    def capture_media_requests(self, anime: Anime) -> dict[str, str] | None:
         found_m3u8: bool = False
         found_vtt: bool = self.args.no_subtitles
         attempt: int = 0
@@ -575,7 +593,10 @@ class HianimeExtractor:
 
                     urls["all-vtt"].append(uri)
             attempt += 1
+            if attempt in self.SERVER_REFRESH:
+                self.click_server_button(anime)
             if attempt in self.DOWNLOAD_REFRESH:
+                print(f"\n{Fore.LIGHTRED_EX}Attempting page refresh..")
                 self.driver.refresh()
             time.sleep(1)
 
