@@ -1,4 +1,5 @@
 from asyncio import threads
+from datetime import datetime
 import json
 import os
 import sys
@@ -32,8 +33,11 @@ class Anime:
     url: str
     sub_episodes: int
     dub_episodes: int
+    # download_type can be "sub", "dub"
     download_type: str = ""
     season_number: int = -1
+    episode_offset: int = 0
+    year: int | None = None
 
 class SilentLogger:
     def debug(self, msg):
@@ -172,7 +176,7 @@ class HianimeExtractor:
         else:
             print("Sub episodes are not available. Defaulting to dub.")
             anime.download_type = "dub"
-
+        
         # if dub is chosen, ask if subtitles are wanted
         if anime.download_type == "dub" and not self.args.no_subtitles:
             self.args.no_subtitles = input(f"{Fore.LIGHTCYAN_EX}Do you want to download subtitles for the dub? (y/n):{Fore.LIGHTYELLOW_EX} ").strip().lower() == "n"
@@ -195,9 +199,31 @@ class HianimeExtractor:
             start_ep = 1
             end_ep = 1
 
-        anime.season_number = get_int_in_range(
-            f"{Fore.LIGHTCYAN_EX}Enter the season number for this anime:{Fore.LIGHTYELLOW_EX} "
-        )
+        if self.args.is_ova:
+            anime.season_number = 0
+            anime.episode_offset = get_int_in_range(
+                f"{Fore.LIGHTCYAN_EX}Enter the OVA episode number offset for filename use (default=0):{Fore.LIGHTYELLOW_EX} ",
+                0,
+                10000, 0
+            )
+
+        if self.args.is_movie:
+            anime.year = self.get_anime_year(anime.name)
+            if not anime.year:
+                anime.year = get_int_in_range(
+                    f"{Fore.LIGHTCYAN_EX}Enter the movie release year (e.g., {datetime.datetime.now().year}):{Fore.LIGHTYELLOW_EX} ",
+                    datetime.datetime.now().year - 150,
+                    datetime.datetime.now().year + 1,
+                    datetime.datetime.now().year
+                )
+            anime.name += f" ({anime.year})"
+
+        if anime.season_number == -1 and not self.args.is_movie and not self.args.is_ova:
+            # only ask for season number if not already set (OVA is set to 0)
+            # and if not a movie (movies don't have seasons)
+            anime.season_number = get_int_in_range(
+                f"{Fore.LIGHTCYAN_EX}Enter the season number for this anime:{Fore.LIGHTYELLOW_EX} "
+            )
 
         print(Fore.LIGHTGREEN_EX + f"\nCreating folder for {anime.name} if does not exist...\n")
 
@@ -269,7 +295,7 @@ class HianimeExtractor:
 
         self.driver.quit()
         print()
-        
+
         print(f"\n{Fore.LIGHTGREEN_EX}Waiting for all downloads to complete...\n")
         while threads:
             max_eta = 0
@@ -291,7 +317,7 @@ class HianimeExtractor:
                 break
             time.sleep(10)
         print(f"\n\n{Fore.LIGHTGREEN_EX}All downloads completed!\n")
-
+        
         self.write_anime_json(folder, anime, episode_list)
 
 
@@ -305,7 +331,7 @@ class HianimeExtractor:
         )
         os.makedirs(folder, exist_ok=True)
         return folder
-
+    
 
     #function to write anime and episodes data to a json file
     def write_anime_json(self, folder: str, anime: Anime, episodes: list[dict[str,Any]]) -> None:
@@ -316,7 +342,7 @@ class HianimeExtractor:
             json.dump({**asdict(anime), "episodes": episodes}, json_file, indent=4)
 
 
-    #download episodes from a json file using threading to speed it up
+    #download episodes from a json file
     def download_from_json(self, anime: Anime, json_file: str, folder: str, start_ep: int, end_ep: int) -> None:
         """Download episodes from a JSON file containing episode data."""
         with open(f"{folder}{json_file}", "r") as file:
@@ -353,6 +379,7 @@ class HianimeExtractor:
                 break
             time.sleep(10)
         print(f"\n\n{Fore.LIGHTGREEN_EX}All downloads completed!\n")
+
 
 
     #function to download a single episode, used in a thread
@@ -393,6 +420,7 @@ class HianimeExtractor:
         elif not self.args.no_subtitles:
             print(f"Skipping {name}.vtt (No VTT Stream Found)")
 
+
     @staticmethod
     def get_download_type():
         ans = (
@@ -410,6 +438,27 @@ class HianimeExtractor:
             f"{Fore.LIGHTRED_EX}Invalid response, please respond with either 'sub' or 'dub'."
         )
         return HianimeExtractor.get_download_type()
+    
+    def get_anime_year(self, title: str) -> str | None:
+        """Look up the release year of an anime/movie using Jikan (MyAnimeList) API."""
+        url = f"https://api.jikan.moe/v4/anime"
+        params = {"q": title, "limit": 1}
+        response = requests.get(url, params=params)
+        if response.status_code == 200:
+            data = response.json()
+            results = data.get("data", [])
+            if results:
+                aired_from = results[0].get("aired", {}).get("from")
+                if aired_from:
+                    year = aired_from[:4]
+                    return year
+                else:
+                    print("No air date found for this anime.")
+            else:
+                print("Anime not found.")
+        else:
+            print("Error contacting Jikan API.")
+        return None
 
     def configure_driver(self) -> None:
         mobile_emulation: dict[str, str] = {"deviceName": "iPhone X"}
@@ -550,8 +599,7 @@ class HianimeExtractor:
 
         print(f"{Fore.LIGHTRED_EX}No matching server button could be found")
         return None
-
-    # function to click the server button in attempt to fix a stalled episode capture
+    
     def click_server_button(self, anime: Anime) -> None:
         print(f"{Fore.LIGHTRED_EX}\nClicking server button...")
         options = self.get_server_options(anime.download_type)
@@ -567,6 +615,7 @@ class HianimeExtractor:
                         f"{Fore.LIGHTRED_EX}Error clicking server button:\n\n{Fore.LIGHTWHITE_EX}{e}"
                     )
                     input("Please manually click the button and then press Enter to continue...")
+  
 
     def get_episode_urls(
         self, page: str, start_episode: int, end_episode: int

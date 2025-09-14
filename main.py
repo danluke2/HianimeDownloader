@@ -87,6 +87,14 @@ class Main:
             "--json-file", type=str, default=None, help="Path to a JSON file with episode data"
         )
 
+        parser.add_argument(
+            "--is-movie",  action="store_true", default=False, help="Searching for a movie"
+        )
+
+        parser.add_argument(
+            "--is-ova",  action="store_true", default=False, help="Searching for an OVA"
+        )
+
         return parser.parse_args()
 
 
