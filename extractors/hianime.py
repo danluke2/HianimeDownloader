@@ -1,6 +1,7 @@
 import json
 import os
 import sys
+import threading
 import time
 from argparse import Namespace
 from dataclasses import asdict, dataclass
@@ -184,6 +185,15 @@ class HianimeExtractor:
             f"{Fore.LIGHTCYAN_EX}Enter the season number for this anime:{Fore.LIGHTYELLOW_EX} "
         )
 
+        print(Fore.LIGHTGREEN_EX + f"\nCreating folder for {anime.name} if does not exist...\n")
+
+        folder = self.create_anime_folder(anime)
+
+        if self.args.json_file:
+            print(Fore.LIGHTGREEN_EX + f"Downloading episodes {start_ep} - {end_ep} from {self.args.json_file}\n")
+            self.download_from_json(anime, self.args.json_file, folder, start_ep, end_ep)
+            return
+
         self.configure_driver()
         self.driver.get(anime.url)
         button: WebElement = self.find_server_button(anime)  # type: ignore
@@ -239,7 +249,19 @@ class HianimeExtractor:
 
         self.driver.quit()
         print()
-        self.download_streams(anime, episode_list)
+        self.download_streams(anime, episode_list, folder)
+
+
+    #function to create anime folder for storing downloads
+    def create_anime_folder(self, anime: Anime) -> str:
+        folder = (
+            os.path.abspath(self.args.output_dir)
+            + os.sep
+            + anime.name
+            + f" ({anime.download_type[0].upper()}{anime.download_type[1:]}){os.sep}"
+        )
+        os.makedirs(folder, exist_ok=True)
+        return folder
 
 
     #function to write anime and episodes data to a json file
@@ -251,14 +273,46 @@ class HianimeExtractor:
             json.dump({**asdict(anime), "episodes": episodes}, json_file, indent=4)
 
 
-    def download_streams(self, anime: Anime, episodes: list[dict[str, Any]]):
-        folder = (
-            os.path.abspath(self.args.output_dir)
-            + os.sep
-            + anime.name
-            + f" ({anime.download_type[0].upper()}{anime.download_type[1:]}){os.sep}"
-        )
-        os.makedirs(folder, exist_ok=True)
+    #download episodes from a json file using threading to speed it up
+    def download_from_json(self, anime: Anime, json_file: str, folder: str, start_ep: int, end_ep: int) -> None:
+        """Download episodes from a JSON file containing episode data."""
+        with open(f"{folder}{json_file}", "r") as file:
+            episodes = json.load(file)["episodes"]
+
+        threads = []
+        for episode in episodes:
+            if episode["number"] < start_ep or episode["number"] > end_ep:
+                continue
+            print(f"\nDownloading Episode {episode['number']} - {episode['title']}")
+
+            t = threading.Thread(target=self.download_episode, args=(anime, episode, folder), daemon=True)
+            t.start()
+            threads.append(t)
+
+        print(f"\n{Fore.LIGHTGREEN_EX}Waiting for all downloads to complete...\n")
+        while threads:
+            max_eta = 0
+            with self._progress_lock:
+                for ep_name, prog in self.download_progress.items():
+                    eta = prog.get("eta")
+                    if eta is not None:
+                        max_eta = max(max_eta, eta)
+            for t in threads[:]:
+                if not t.is_alive():
+                    t.join()
+                    threads.remove(t)
+            alive_count = len(threads)
+            eta_min = max_eta // 60
+            eta_sec = max_eta % 60
+            eta_str = f"{int(eta_min)}m {int(eta_sec)}s"
+            print(f"{Fore.LIGHTCYAN_EX}Download threads still running: {alive_count}, Max Episode ETA: {eta_str}", end="\r")
+            if alive_count == 0:
+                break
+            time.sleep(10)
+        print(f"\n\n{Fore.LIGHTGREEN_EX}All downloads completed!\n")
+
+
+    def download_streams(self, anime: Anime, episodes: list[dict[str, Any]], folder: str) -> None:
 
         self.write_anime_json(folder, anime, episodes)
 

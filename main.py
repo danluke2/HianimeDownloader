@@ -83,6 +83,10 @@ class Main:
             "--max-retries", type=int, default=60, help="Max retries to find url"
         )
 
+        parser.add_argument(
+            "--json-file", type=str, default=None, help="Path to a JSON file with episode data"
+        )
+
         return parser.parse_args()
 
 
