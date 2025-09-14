@@ -14,9 +14,11 @@ def get_conformation(prompt: str) -> bool:
 
 
 def get_int_in_range(
-    prompt: str, _min: int = 0, _max: int | float = float("inf")
+    prompt: str, _min: int = 0, _max: int | float = float("inf"), default: int | None = None
 ) -> int:
     ans: str = input(prompt)
+    if ans.strip() == "" and default is not None:
+        return default
     try:
         _int: int = int(ans)
     except ValueError:
@@ -27,7 +29,7 @@ def get_int_in_range(
         return _int
 
     print("Invalid input. The provide input was not within the expected range.")
-    return get_int_in_range(prompt, _min, _max)
+    return get_int_in_range(prompt, _min, _max, default)
 
 
 def safe_remove(file: str, retries: int = 5, delay: int = 2):
