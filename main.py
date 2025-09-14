@@ -79,6 +79,10 @@ class Main:
             "--server", type=str, default=None, help="Streaming Server to download from"
         )
 
+        parser.add_argument(
+            "--max-retries", type=int, default=60, help="Max retries to find url"
+        )
+
         return parser.parse_args()
 
 

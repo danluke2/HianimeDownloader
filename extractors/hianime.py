@@ -95,7 +95,6 @@ class HianimeExtractor:
             "slo",
             "ukr",
         ]
-        self.DOWNLOAD_ATTEMPT_CAP: int = 45
         self.DOWNLOAD_REFRESH: tuple[int, int] = (15, 30)
         self.BAD_TITLE_CHARS: list[str] = [
             "-",
@@ -457,9 +456,9 @@ class HianimeExtractor:
         all_urls = []
         while (
             not found_m3u8 or not found_vtt
-        ) and self.DOWNLOAD_ATTEMPT_CAP >= attempt:
+        ) and self.args.max_retries >= attempt:
             sys.stdout.write(
-                f"\r{Fore.CYAN}Attempt #{attempt} - {self.DOWNLOAD_ATTEMPT_CAP - attempt} Attempts Remaining"
+                f"\r{Fore.CYAN}Attempt #{attempt} - {self.args.max_retries - attempt} Attempts Remaining"
             )
             sys.stdout.flush()
 
