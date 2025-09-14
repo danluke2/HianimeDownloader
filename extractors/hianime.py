@@ -227,6 +227,7 @@ class HianimeExtractor:
 
         self.captured_video_urls = []
         self.captured_subtitle_urls = []
+        threads = []
         for episode in episode_list:
             url = episode["url"]
             number = episode["number"]
