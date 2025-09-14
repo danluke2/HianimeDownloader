@@ -2,7 +2,7 @@ import os
 import time
 
 
-def get_conformation(prompt: str) -> bool:
+def get_confirmation(prompt: str) -> bool:
     ans: str = input(prompt).lower()
     if ans == "y" or ans == "yes" or ans == "true":
         return True
@@ -10,7 +10,7 @@ def get_conformation(prompt: str) -> bool:
         return False
     else:
         print("Please provide a valid response")
-        return get_conformation(prompt)
+        return get_confirmation(prompt)
 
 
 def get_int_in_range(

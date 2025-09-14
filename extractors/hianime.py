@@ -21,7 +21,7 @@ from selenium_stealth import stealth
 from seleniumwire import webdriver
 from yt_dlp import YoutubeDL
 
-from tools.functions import get_conformation, get_int_in_range, safe_remove
+from tools.functions import get_confirmation, get_int_in_range, safe_remove
 from tools.YTDLogger import YTDLogger
 
 
@@ -241,7 +241,7 @@ class HianimeExtractor:
                     self.captured_subtitle_urls.append(media_requests["vtt"])
             except KeyboardInterrupt:
                 print("\n\nCanceling media capture...")
-                if not get_conformation(
+                if not get_confirmation(
                     "Would you like to download link capture up to now? (y/n): "
                 ):
                     self.driver.quit()
@@ -587,7 +587,7 @@ class HianimeExtractor:
             print(
                 f"\n{Fore.LIGHTRED_EX}No .vtt streams found. Check that the subtitles are not apart of the video file, option '--no-subtitles' can be used to skip downloading subtitles."
             )
-            self.args.no_subtitles = get_conformation(
+            self.args.no_subtitles = get_confirmation(
                 f"\n{Fore.LIGHTCYAN_EX}Would you like to skip the collection of subtiles on the following episodes (y/n): "
             )
             print()
