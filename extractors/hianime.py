@@ -246,7 +246,10 @@ class HianimeExtractor:
             json.dump({**asdict(anime), "episodes": episodes}, json_file, indent=4)
 
         for episode in episodes:
-            name = f"{anime.name} - s{anime.season_number:02}e{episode['number']:02} - {episode['title']}"
+            # episode titles may have bad characters so we need to sanitize them
+            title = episode["title"].translate(self.TITLE_TRANS)
+            # file names could have character limit so we use Plex nameing convention
+            name = f"s{anime.season_number:02}e{episode['number']:02} - {title}"
             if "m3u8" not in episode.keys() and not episode["m3u8"]:
                 print(f"Skipping {name} (No M3U8 Stream Found)")
                 continue
