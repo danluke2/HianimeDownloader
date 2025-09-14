@@ -165,14 +165,16 @@ class HianimeExtractor:
         number_of_episodes = getattr(anime, f"{anime.download_type}_episodes")
         if number_of_episodes != 1:
             start_ep = get_int_in_range(
-                f"{Fore.LIGHTCYAN_EX}Enter the starting episode number (inclusive):{Fore.LIGHTYELLOW_EX} ",
+                f"{Fore.LIGHTCYAN_EX}Enter the starting episode number (inclusive, default=1):{Fore.LIGHTYELLOW_EX} ",
                 1,
-                number_of_episodes,
+                number_of_episodes, 
+                1
             )
             end_ep = get_int_in_range(
-                f"{Fore.LIGHTCYAN_EX}Enter the ending episode number (inclusive):{Fore.LIGHTYELLOW_EX} ",
+                f"{Fore.LIGHTCYAN_EX}Enter the ending episode number (inclusive, default={number_of_episodes}):{Fore.LIGHTYELLOW_EX} ",
                 1,
-                number_of_episodes,
+                number_of_episodes, 
+                number_of_episodes
             )
         else:
             start_ep = 1
@@ -413,9 +415,10 @@ class HianimeExtractor:
 
             selection = server_names[
                 get_int_in_range(
-                    f"\n{Fore.LIGHTCYAN_EX}Server:{Fore.LIGHTYELLOW_EX} ",
+                    f"\n{Fore.LIGHTCYAN_EX}Server (default=1):{Fore.LIGHTYELLOW_EX} ",
                     1,
                     len(options),
+                    1
                 )
                 - 1
             ]
