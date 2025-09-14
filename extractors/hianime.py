@@ -241,6 +241,16 @@ class HianimeExtractor:
         print()
         self.download_streams(anime, episode_list)
 
+
+    #function to write anime and episodes data to a json file
+    def write_anime_json(self, folder: str, anime: Anime, episodes: list[dict[str,Any]]) -> None:
+        """Write anime and episodes data to a JSON file."""
+        with open(
+            f"{folder}{anime.name} (Season {anime.season_number}).json", "w"
+        ) as json_file:
+            json.dump({**asdict(anime), "episodes": episodes}, json_file, indent=4)
+
+
     def download_streams(self, anime: Anime, episodes: list[dict[str, Any]]):
         folder = (
             os.path.abspath(self.args.output_dir)
@@ -250,11 +260,7 @@ class HianimeExtractor:
         )
         os.makedirs(folder, exist_ok=True)
 
-        # Write to JSON file
-        with open(
-            f"{folder}{anime.name} (Season {anime.season_number}).json", "w"
-        ) as json_file:
-            json.dump({**asdict(anime), "episodes": episodes}, json_file, indent=4)
+        self.write_anime_json(folder, anime, episodes)
 
         for episode in episodes:
             # episode titles may have bad characters so we need to sanitize them
