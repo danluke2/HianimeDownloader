@@ -1,3 +1,4 @@
+from asyncio import threads
 import json
 import os
 import sys
@@ -22,7 +23,7 @@ from seleniumwire import webdriver
 from yt_dlp import YoutubeDL
 
 from tools.functions import get_confirmation, get_int_in_range, safe_remove
-from tools.YTDLogger import YTDLogger
+# from tools.YTDLogger import YTDLogger
 
 
 @dataclass
@@ -34,6 +35,15 @@ class Anime:
     download_type: str = ""
     season_number: int = -1
 
+class SilentLogger:
+    def debug(self, msg):
+        pass
+    def warning(self, msg):
+        pass
+    def error(self, msg):
+        pass
+    def info(self, msg):
+        pass
 
 class HianimeExtractor:
     def __init__(self, args: Namespace, name: str | None = None) -> None:
@@ -117,6 +127,9 @@ class HianimeExtractor:
         self.TITLE_TRANS: dict[int, Any] = str.maketrans(
             "", "", "".join(self.BAD_TITLE_CHARS)
         )
+
+        self.download_progress = {}  # Maps episode name to progress info (ETA)
+        self._progress_lock = threading.Lock()
 
     def run(self):
         # Determine how to get the Anime object:
@@ -240,6 +253,11 @@ class HianimeExtractor:
                 self.captured_video_urls.append(media_requests["m3u8"])
                 if not self.args.no_subtitles:
                     self.captured_subtitle_urls.append(media_requests["vtt"])
+
+                # Have episode URL now, so kick off thread to download it
+                t = threading.Thread(target=self.download_episode, args=(anime, episode, folder), daemon=True)
+                t.start()
+                threads.append(t)
             except KeyboardInterrupt:
                 print("\n\nCanceling media capture...")
                 if not get_confirmation(
@@ -250,7 +268,28 @@ class HianimeExtractor:
 
         self.driver.quit()
         print()
-        self.download_streams(anime, episode_list, folder)
+        
+        print(f"\n{Fore.LIGHTGREEN_EX}Waiting for all downloads to complete...\n")
+        while threads:
+            max_eta = 0
+            with self._progress_lock:
+                for ep_name, prog in self.download_progress.items():
+                    eta = prog.get("eta")
+                    if eta is not None:
+                        max_eta = max(max_eta, eta)
+            for t in threads[:]:
+                if not t.is_alive():
+                    t.join()
+                    threads.remove(t)
+            alive_count = len(threads)
+            eta_min = max_eta // 60
+            eta_sec = max_eta % 60
+            eta_str = f"{int(eta_min)}m {int(eta_sec)}s"
+            print(f"{Fore.LIGHTCYAN_EX}Download threads still running: {alive_count}, Max Episode ETA: {eta_str}", end="\r")
+            if alive_count == 0:
+                break
+            time.sleep(10)
+        print(f"\n\n{Fore.LIGHTGREEN_EX}All downloads completed!\n")
 
 
     #function to create anime folder for storing downloads
@@ -313,35 +352,43 @@ class HianimeExtractor:
         print(f"\n\n{Fore.LIGHTGREEN_EX}All downloads completed!\n")
 
 
-    def download_streams(self, anime: Anime, episodes: list[dict[str, Any]], folder: str) -> None:
+    #function to download a single episode, used in a thread
+    def download_episode(self, anime: Anime, episode: dict[str, Any], folder: str) -> None:
 
-        self.write_anime_json(folder, anime, episodes)
-
-        for episode in episodes:
-            # episode titles may have bad characters so we need to sanitize them
-            title = episode["title"].translate(self.TITLE_TRANS)
-            # file names could have character limit so we use Plex nameing convention
+        # episode titles may have bad characters so we need to sanitize them
+        title = episode["title"].translate(self.TITLE_TRANS)
+        if self.args.is_movie:
+            name = f"{title} (Movie)"
+        elif self.args.is_ova:
+            # OVA tends to be special episodes outside of the main season, so using season 0
+            name = f"s{anime.season_number:02}e{(episode['number'])+anime.episode_offset:02} - {title} (OVA)"
+        else:
             name = f"s{anime.season_number:02}e{episode['number']:02} - {title}"
-            if "m3u8" not in episode.keys() and not episode["m3u8"]:
-                print(f"Skipping {name} (No M3U8 Stream Found)")
-                continue
+        if "m3u8" not in episode.keys() and not episode["m3u8"]:
+            print(f"Skipping {name} (No M3U8 Stream Found)")
+            return
 
+        try:
             result = self.yt_dlp_download(
                 self.look_for_variants(episode["m3u8"], episode["headers"]),
                 episode["headers"],
                 f"{folder}{name}.mp4",
+                episode_name=name
             )
-            if not result:
-                break
+        except Exception as e:
+            print(f"\n\n{Fore.LIGHTRED_EX}Error while downloading {name}: \n\n{e}")
+            return
+        
+        if not result:
+            print(f"Failed to download {name}, skipping subtitles if any")
+            return
 
-            if "vtt" in episode.keys() and episode["vtt"]:
-                self.yt_dlp_download(
-                    episode["vtt"], episode["headers"], f"{folder}{name}.vtt"
-                )
-            elif not self.args.no_subtitles:
-                print(f"Skipping {name}.vtt (No VTT Stream Found)")
-            # except Exception as e:
-            #     print(f"\n\nError while downloading {name}: \n\n{e}")
+        if "vtt" in episode.keys() and episode["vtt"]:
+            self.yt_dlp_download(
+                episode["vtt"], episode["headers"], f"{folder}{name}.vtt"
+            )
+        elif not self.args.no_subtitles:
+            print(f"Skipping {name}.vtt (No VTT Stream Found)")
 
     @staticmethod
     def get_download_type():
@@ -647,20 +694,33 @@ class HianimeExtractor:
 
         return url
 
-    def yt_dlp_download(self, url: str, headers: dict[str, str], location: str) -> bool:
+    def yt_dlp_download(self, url: str, headers: dict[str, str], location: str, episode_name: str = "") -> bool:
+        def progress_hook(d):
+            if d['status'] == 'downloading':
+                with self._progress_lock:
+                    self.download_progress[episode_name] = {
+                        "eta": d.get("eta", None)
+                    }
+            elif d['status'] == 'finished':
+                with self._progress_lock:
+                    self.download_progress[episode_name] = {
+                        "done": True
+                    }
+
         yt_dlp_options: dict[str, Any] = {
             "no_warnings": False,
-            "quiet": False,
+            "quiet": True,
             "outtmpl": location,
             "format": "best",
             "http_headers": headers,
-            "logger": YTDLogger(),
-            "fragment_retries": 10,  # Retry up to 10 times for failed fragments
+            "logger": SilentLogger(),
+            "fragment_retries": 10,
             "retries": 10,
             "socket_timeout": 60,
             "sleep_interval_requests": 1,
             "force_keyframes_at_cuts": True,
             "allow_unplayable_formats": True,
+            "progress_hooks": [progress_hook],
         }
 
         _return = True
