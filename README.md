@@ -1,8 +1,19 @@
-# GDownloader
+# HiAnime Downloader
 
+A tool forked from https://github.com/gheatherington/HianimeDownloader with HiAnime focused improvements. I did not test this code against other media platforms. Some key additions are as follows:
+
+- Threading to allow concurrent episode downloads
+- Config file to specify defaults and minimize user input
+- Error handling to prevent program crashes
+
+Original Overview:
+
+```
 A simple CLI tool for downloading content from the streaming platform [hianime.to](hianime.to) + [social media platfroms](#supported-platforms). \
 This tool works best if you have a VPN installed with Adblock support, as I have not been able to get a working ad
 blocker working with the chrome session.
+```
+
 
 ## Requirements
 
@@ -12,10 +23,6 @@ blocker working with the chrome session.
 ## Setup
 
 1. Download the files from the repository.
-
-   ```bash
-   git clone https://github.com/gheatherington/HianimeDownloader
-   ```
 
 2. Navigate into the directory it was downloaded to in your terminal.
 3. Using pip install all the requirement from the `requirements.txt` file.
@@ -48,32 +55,19 @@ blocker working with the chrome session.
 
 ## Usage
 
-- Update the repository before running (as it is still being worked on)
-
-  ```bash
-  git fetch https://github.com/gheatherington/HianimeDownloader
-  ```
-
 - After running the `main.py` file, enter the name of the anime you would like to search for
   from [hianime.to](hianime.to) or provide a link to the content you would like to download
 
-- If you provided a link you will jump to either the [Downloading from HiAnime](#downloading-from-hianime) or [Downloading from Other](#downloading-from-other-platforms)
+- If you provided a link you will jump to either the [Downloading from HiAnime](#downloading-from-hianime) 
+
 - If you enter a name of an anime it will bring up a selection of anime options from the site, select the desired one with the corresponding number.
 
-### Downloading From HiAnime
+- follow prompts as necessary to download desired number of episodes in desired format
 
-- Next you will be prompted to either select which version of the anime you would like; either sub or dub. If only one
-  was available, it will be automatically selected for you.
-- The next two prompts ask which episodes you want to download. You first provide the first episode, then the last
-  episode you would like to download (both values are inclusive)
-- The next prompt asks what season in the series this content is as an integer.
-- The final prompt asks you which of the streaming servers you would like to download from (HD-1, HD-2, etc.)
-- **Note** if a redirect ad to a second tab is created, close the second tab manually and refresh the original site to
-  continue download. (This will hopefully be patched eventually)
+<!-- - **Note** if a redirect ad to a second tab is created, close the second tab manually and refresh the original site to
+  continue download. (This will hopefully be patched eventually) -->
 
-### Downloading from other platforms
 
-- Depending on the platform ([view list of supported platforms](#supported-platforms)) you will either be prompted to select a file name or it will be automatically chosen for you
 
 ## Options
 
@@ -95,6 +89,7 @@ You are able to pass parameters when running the file to add additional options.
 
 - `--aria` uses the aria2c downloader for yt-dlp to download the content (untested)
 
+
 ### Usage Example
 
 ```bash
@@ -102,10 +97,52 @@ python3 main.py -o ~/Desktop/ --server "HD-1" -n "Solo Leveling" --no-subtitles
 
 ```
 
-## Supported Platforms
+## Default Configuration
 
-Here is a current list of tested platforms
+You can customize default behaviors by editing the `config.json` file. This allows you to avoid repetitive prompts and streamline your downloads. Here are the available configuration options:
 
-- TikTok
-- Youtube (long form videos/shorts)
-- Instagram (reels/images)
+### Configuration Options
+
+- **`default_server`**: Set a list of preferred streaming servers in priority order. The tool will try each server in sequence until it finds an available one. If none are available, you'll be prompted to choose.
+  - Example: `"default_server": ["HD-1", "HD-3", "HD-2"]`
+  - Set to `null` or `[]` to always prompt for server selection
+
+- **`default_download_type`**: Set your preferred download type (`"sub"` or `"dub"`). When both are available, this choice will be used automatically. If only one type is available, that one will be used regardless of this setting.
+  - Example: `"default_download_type": "dub"`
+  - Set to `null` to always prompt when both sub and dub are available
+
+- **`download_all`**: When set to `true`, automatically downloads all episodes without prompting for a range.
+  - Example: `"download_all": true`
+  - Default: `false`
+
+- **`subtitles`**: When set to `true`, downloads subtitle files (.vtt or .srt) along with the video.
+  - Default: `true`
+
+- **`srt_format`**: When set to `true`, converts downloaded .vtt subtitle files to .srt format.
+  - Default: `false`
+
+- **`output_dir`**, **`movie_output_dir`**, **`ova_output_dir`**: Customize the default output directories for different content types.
+
+### Example Configuration
+
+```json
+{
+  "subtitles": true,
+  "output_dir": "/Users/yourname/Anime",
+  "movie_output_dir": "/Users/yourname/Movies",
+  "ova_output_dir": "/Users/yourname/OVAs",
+  "default_server": ["HD-1", "HD-3", "HD-2"],
+  "default_download_type": "dub",
+  "download_all": true,
+  "srt_format": false
+}
+```
+
+With this configuration, the tool will:
+- Automatically use dub when available
+- Try HD-1 first, then HD-3, then HD-2 for streaming
+- Download all episodes without asking for a range
+- Save files to your specified directories
+- Download subtitles in .vtt format
+
+**Note**: Folder naming automatically adapts to your `default_download_type`. If you set `"dub"` as default, dub folders won't have "(Dub)" appended to their names. Sub folders will still show "(Sub)" to distinguish them.

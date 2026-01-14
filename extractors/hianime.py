@@ -1,6 +1,9 @@
+from asyncio import threads
+from datetime import datetime
 import json
 import os
 import sys
+import threading
 import time
 from argparse import Namespace
 from dataclasses import asdict, dataclass
@@ -20,8 +23,8 @@ from selenium_stealth import stealth
 from seleniumwire import webdriver
 from yt_dlp import YoutubeDL
 
-from tools.functions import get_conformation, get_int_in_range, safe_remove
-from tools.YTDLogger import YTDLogger
+from tools.functions import get_confirmation, get_int_in_range, safe_remove, vtt_to_srt
+# from tools.YTDLogger import YTDLogger
 
 
 @dataclass
@@ -30,9 +33,21 @@ class Anime:
     url: str
     sub_episodes: int
     dub_episodes: int
+    # download_type can be "sub", "dub"
     download_type: str = ""
     season_number: int = -1
+    episode_offset: int = 0
+    year: int | None = None
 
+class SilentLogger:
+    def debug(self, msg):
+        pass
+    def warning(self, msg):
+        pass
+    def error(self, msg):
+        pass
+    def info(self, msg):
+        pass
 
 class HianimeExtractor:
     def __init__(self, args: Namespace, name: str | None = None) -> None:
@@ -95,8 +110,8 @@ class HianimeExtractor:
             "slo",
             "ukr",
         ]
-        self.DOWNLOAD_ATTEMPT_CAP: int = 45
-        self.DOWNLOAD_REFRESH: tuple[int, int] = (15, 30)
+        self.DOWNLOAD_REFRESH: tuple[int, int, int] = (15, 30, 45)
+        self.SERVER_REFRESH: tuple[int, int, int] = (7, 22, 37, 52)
         self.BAD_TITLE_CHARS: list[str] = [
             "-",
             ".",
@@ -117,12 +132,20 @@ class HianimeExtractor:
             "", "", "".join(self.BAD_TITLE_CHARS)
         )
 
+        self.download_progress = {}  # Maps episode name to progress info (ETA)
+        self._progress_lock = threading.Lock()
+
     def run(self):
-        anime: Anime | None = (  # type: ignore
-            self.get_anime_from_link(self.link)
-            if self.link
-            else (self.get_anime(self.name) if self.name else self.get_anime())
-        )
+        # Determine how to get the Anime object:
+        if self.link:
+            # If a direct link is provided, fetch anime from the link
+            anime: Anime | None = self.get_anime_from_link(self.link)
+        elif self.name:
+            # If a name is provided, search for the anime by name
+            anime: Anime | None = self.get_anime(self.name)
+        else:
+            # Otherwise, prompt the user to enter the anime name
+            anime: Anime | None = self.get_anime()
 
         if not anime:
             return
@@ -145,34 +168,77 @@ class HianimeExtractor:
             + Fore.LIGHTCYAN_EX
         )
 
+        # Determine download type based on availability and default preference
         if anime.sub_episodes != 0 and anime.dub_episodes != 0:
-            anime.download_type = self.get_download_type()
+            # Both available - use default if set and valid, otherwise ask
+            if self.args.default_download_type and self.args.default_download_type.lower() in ["sub", "dub"]:
+                print(f"Using default download type of {self.args.default_download_type.lower()}.")
+                anime.download_type = self.args.default_download_type.lower()
+            else:
+                anime.download_type = self.get_download_type()
         elif anime.dub_episodes == 0:
             print("Dub episodes are not available. Defaulting to sub.")
             anime.download_type = "sub"
         else:
             print("Sub episodes are not available. Defaulting to dub.")
             anime.download_type = "dub"
+        
+        # if dub is chosen, ask if subtitles are wanted
+        if anime.download_type == "dub" and self.args.subtitles:
+            self.args.subtitles = input(f"{Fore.LIGHTCYAN_EX}Do you want to download subtitles for the dub? (y/n):{Fore.LIGHTYELLOW_EX} ").strip().lower() == "y"
 
         number_of_episodes = getattr(anime, f"{anime.download_type}_episodes")
-        if number_of_episodes != 1:
+        if number_of_episodes != 1 and not self.args.download_all:
             start_ep = get_int_in_range(
-                f"{Fore.LIGHTCYAN_EX}Enter the starting episode number (inclusive):{Fore.LIGHTYELLOW_EX} ",
+                f"{Fore.LIGHTCYAN_EX}Enter the starting episode number (inclusive, default=1):{Fore.LIGHTYELLOW_EX} ",
                 1,
-                number_of_episodes,
+                number_of_episodes, 
+                1
             )
             end_ep = get_int_in_range(
-                f"{Fore.LIGHTCYAN_EX}Enter the ending episode number (inclusive):{Fore.LIGHTYELLOW_EX} ",
+                f"{Fore.LIGHTCYAN_EX}Enter the ending episode number (inclusive, default={number_of_episodes}):{Fore.LIGHTYELLOW_EX} ",
                 1,
-                number_of_episodes,
+                number_of_episodes, 
+                number_of_episodes
             )
         else:
             start_ep = 1
-            end_ep = 1
+            end_ep = number_of_episodes
 
-        anime.season_number = get_int_in_range(
-            f"{Fore.LIGHTCYAN_EX}Enter the season number for this anime:{Fore.LIGHTYELLOW_EX} "
-        )
+        if self.args.is_ova:
+            anime.season_number = 0
+            anime.episode_offset = get_int_in_range(
+                f"{Fore.LIGHTCYAN_EX}Enter the OVA episode number offset for filename use (default=0):{Fore.LIGHTYELLOW_EX} ",
+                0,
+                10000, 0
+            )
+
+        if self.args.is_movie:
+            anime.year = self.get_anime_year(anime.name)
+            if not anime.year:
+                anime.year = get_int_in_range(
+                    f"{Fore.LIGHTCYAN_EX}Enter the movie release year (e.g., {datetime.datetime.now().year}):{Fore.LIGHTYELLOW_EX} ",
+                    datetime.datetime.now().year - 150,
+                    datetime.datetime.now().year + 1,
+                    datetime.datetime.now().year
+                )
+            anime.name += f" ({anime.year})"
+
+        if anime.season_number == -1 and not self.args.is_movie and not self.args.is_ova:
+            # only ask for season number if not already set (OVA is set to 0)
+            # and if not a movie (movies don't have seasons)
+            anime.season_number = get_int_in_range(
+                f"{Fore.LIGHTCYAN_EX}Enter the season number for this anime:{Fore.LIGHTYELLOW_EX} "
+            )
+
+        print(Fore.LIGHTGREEN_EX + f"\nCreating folder for {anime.name} if does not exist...\n")
+
+        folder = self.create_anime_folder(anime)
+
+        if self.args.json_file:
+            print(Fore.LIGHTGREEN_EX + f"Downloading episodes {start_ep} - {end_ep} from {self.args.json_file}\n")
+            self.download_from_json(anime, self.args.json_file, folder, start_ep, end_ep)
+            return
 
         self.configure_driver()
         self.driver.get(anime.url)
@@ -193,6 +259,7 @@ class HianimeExtractor:
 
         self.captured_video_urls = []
         self.captured_subtitle_urls = []
+        threads = []
         for episode in episode_list:
             url = episode["url"]
             number = episode["number"]
@@ -210,18 +277,23 @@ class HianimeExtractor:
                 self.driver.requests.clear()
                 self.driver.get(url)
                 self.driver.execute_script("window.focus();")
-                media_requests = self.capture_media_requests()
+                media_requests = self.capture_media_requests(anime)
                 if not media_requests:
                     print("No m3u8 file was found skipping download")
                     continue
-
+                
                 episode.update(media_requests)
                 self.captured_video_urls.append(media_requests["m3u8"])
-                if not self.args.no_subtitles:
+                if self.args.subtitles:
                     self.captured_subtitle_urls.append(media_requests["vtt"])
+
+                # Have episode URL now, so kick off thread to download it
+                t = threading.Thread(target=self.download_episode, args=(anime, episode, folder), daemon=True)
+                t.start()
+                threads.append(t)
             except KeyboardInterrupt:
                 print("\n\nCanceling media capture...")
-                if not get_conformation(
+                if not get_confirmation(
                     "Would you like to download link capture up to now? (y/n): "
                 ):
                     self.driver.quit()
@@ -229,45 +301,151 @@ class HianimeExtractor:
 
         self.driver.quit()
         print()
-        self.download_streams(anime, episode_list)
 
-    def download_streams(self, anime: Anime, episodes: list[dict[str, Any]]):
+        print(f"\n{Fore.LIGHTGREEN_EX}Waiting for all downloads to complete...\n")
+        while threads:
+            max_eta = 0
+            with self._progress_lock:
+                for ep_name, prog in self.download_progress.items():
+                    eta = prog.get("eta")
+                    if eta is not None:
+                        max_eta = max(max_eta, eta)
+            for t in threads[:]:
+                if not t.is_alive():
+                    t.join()
+                    threads.remove(t)
+            alive_count = len(threads)
+            eta_min = int(max_eta // 60)
+            eta_sec = int(max_eta % 60)
+            eta_str = f"{eta_min}m {eta_sec}s"
+            print(f"{Fore.LIGHTCYAN_EX}Downloads in progress: {alive_count}, Max Episode ETA: {eta_str}".ljust(80), end="\r")
+            if alive_count == 0:
+                break
+            time.sleep(10)
+        print(f"\n\n{Fore.LIGHTGREEN_EX}All downloads completed!\n")
+        
+        self.write_anime_json(folder, anime, episode_list)
+
+
+    #function to create anime folder for storing downloads
+    def create_anime_folder(self, anime: Anime) -> str:
+        # Only include download type in folder name if it differs from default
+        type_suffix = ""
+        if self.args.default_download_type:
+            if anime.download_type.lower() != self.args.default_download_type.lower():
+                type_suffix = f" ({anime.download_type[0].upper()}{anime.download_type[1:]})"
+        else:
+            # If no default is set, always include the type
+            type_suffix = f" ({anime.download_type[0].upper()}{anime.download_type[1:]})"
+        
         folder = (
             os.path.abspath(self.args.output_dir)
             + os.sep
             + anime.name
-            + f" ({anime.download_type[0].upper()}{anime.download_type[1:]}){os.sep}"
+            + type_suffix
+            + os.sep
         )
         os.makedirs(folder, exist_ok=True)
+        return folder
+    
 
-        # Write to JSON file
+    #function to write anime and episodes data to a json file
+    def write_anime_json(self, folder: str, anime: Anime, episodes: list[dict[str,Any]]) -> None:
+        """Write anime and episodes data to a JSON file."""
         with open(
             f"{folder}{anime.name} (Season {anime.season_number}).json", "w"
         ) as json_file:
             json.dump({**asdict(anime), "episodes": episodes}, json_file, indent=4)
 
-        for episode in episodes:
-            name = f"{anime.name} - s{anime.season_number:02}e{episode['number']:02} - {episode['title']}"
-            if "m3u8" not in episode.keys() and not episode["m3u8"]:
-                print(f"Skipping {name} (No M3U8 Stream Found)")
-                continue
 
+    #download episodes from a json file
+    def download_from_json(self, anime: Anime, json_file: str, folder: str, start_ep: int, end_ep: int) -> None:
+        """Download episodes from a JSON file containing episode data."""
+        with open(f"{folder}{json_file}", "r") as file:
+            episodes = json.load(file)["episodes"]
+
+        threads = []
+        for episode in episodes:
+            if episode["number"] < start_ep or episode["number"] > end_ep:
+                continue
+            print(f"\nDownloading Episode {episode['number']} - {episode['title']}")
+
+            t = threading.Thread(target=self.download_episode, args=(anime, episode, folder), daemon=True)
+            t.start()
+            threads.append(t)
+
+        print(f"\n{Fore.LIGHTGREEN_EX}Waiting for all downloads to complete...\n")
+        while threads:
+            max_eta = 0
+            with self._progress_lock:
+                for ep_name, prog in self.download_progress.items():
+                    eta = prog.get("eta")
+                    if eta is not None:
+                        max_eta = max(max_eta, eta)
+            for t in threads[:]:
+                if not t.is_alive():
+                    t.join()
+                    threads.remove(t)
+            alive_count = len(threads)
+            eta_min = int(max_eta // 60)
+            eta_sec = int(max_eta % 60)
+            eta_str = f"{eta_min}m {eta_sec}s"
+            print(f"{Fore.LIGHTCYAN_EX}Download threads still running: {alive_count}, Max Episode ETA: {eta_str}".ljust(80), end="\r")
+            if alive_count == 0:
+                break
+            time.sleep(10)
+        print(f"\n\n{Fore.LIGHTGREEN_EX}All downloads completed!\n")
+
+
+
+    #function to download a single episode, used in a thread
+    def download_episode(self, anime: Anime, episode: dict[str, Any], folder: str) -> None:
+
+        # episode titles may have bad characters so we need to sanitize them
+        title = episode["title"].translate(self.TITLE_TRANS)
+        if self.args.is_movie:
+            name = f"{title} (Movie)"
+        elif self.args.is_ova:
+            # OVA tends to be special episodes outside of the main season, so using season 0
+            name = f"s{anime.season_number:02}e{(episode['number'])+anime.episode_offset:02} - {title} (OVA)"
+        else:
+            name = f"s{anime.season_number:02}e{episode['number']:02} - {title}"
+        if "m3u8" not in episode.keys() and not episode["m3u8"]:
+            print(f"Skipping {name} (No M3U8 Stream Found)")
+            return
+
+        try:
             result = self.yt_dlp_download(
                 self.look_for_variants(episode["m3u8"], episode["headers"]),
                 episode["headers"],
                 f"{folder}{name}.mp4",
+                episode_name=name
             )
-            if not result:
-                break
+        except Exception as e:
+            print(f"\n\n{Fore.LIGHTRED_EX}Error while downloading {name}: \n\n{e}")
+            return
+        
+        if not result:
+            print(f"Failed to download {name}, skipping subtitles if any")
+            return
 
-            if "vtt" in episode.keys() and episode["vtt"]:
-                self.yt_dlp_download(
-                    episode["vtt"], episode["headers"], f"{folder}{name}.vtt"
-                )
-            elif not self.args.no_subtitles:
-                print(f"Skipping {name}.vtt (No VTT Stream Found)")
-            # except Exception as e:
-            #     print(f"\n\nError while downloading {name}: \n\n{e}")
+        if "vtt" in episode.keys() and episode["vtt"]:
+            vtt_path = f"{folder}{name}.vtt"
+            self.yt_dlp_download(
+                episode["vtt"], episode["headers"], vtt_path
+            )
+            
+            # Convert to SRT if requested
+            if self.args.srt_format:
+                try:
+                    srt_path = vtt_to_srt(vtt_path)
+                    safe_remove(vtt_path)  # Remove VTT file after conversion
+                    print(f"{Fore.LIGHTGREEN_EX}Converted to {os.path.basename(srt_path)}")
+                except Exception as e:
+                    print(f"{Fore.LIGHTRED_EX}Error converting {name}.vtt to SRT: {e}")
+        elif self.args.subtitles:
+            print(f"Skipping {name}.vtt (No VTT Stream Found)")
+
 
     @staticmethod
     def get_download_type():
@@ -286,6 +464,27 @@ class HianimeExtractor:
             f"{Fore.LIGHTRED_EX}Invalid response, please respond with either 'sub' or 'dub'."
         )
         return HianimeExtractor.get_download_type()
+    
+    def get_anime_year(self, title: str) -> str | None:
+        """Look up the release year of an anime/movie using Jikan (MyAnimeList) API."""
+        url = f"https://api.jikan.moe/v4/anime"
+        params = {"q": title, "limit": 1}
+        response = requests.get(url, params=params)
+        if response.status_code == 200:
+            data = response.json()
+            results = data.get("data", [])
+            if results:
+                aired_from = results[0].get("aired", {}).get("from")
+                if aired_from:
+                    year = aired_from[:4]
+                    return year
+                else:
+                    print("No air date found for this anime.")
+            else:
+                print("Anime not found.")
+        else:
+            print("Error contacting Jikan API.")
+        return None
 
     def configure_driver(self) -> None:
         mobile_emulation: dict[str, str] = {"deviceName": "iPhone X"}
@@ -378,10 +577,23 @@ class HianimeExtractor:
         options = self.get_server_options(anime.download_type)
         selection = None
 
+        # Try command line server argument first
         if self.args.server:
             for option in options:
                 if option.text.lower().strip() == self.args.server.lower().strip():
                     selection = option.text
+
+        # Try default_server list from config if no selection yet
+        if not selection and hasattr(self.args, 'default_server') and self.args.default_server:
+            # Handle both string and list formats
+            default_servers = self.args.default_server if isinstance(self.args.default_server, list) else [self.args.default_server]
+            for default_srv in default_servers:
+                for option in options:
+                    if option.text.lower().strip() == default_srv.lower().strip():
+                        selection = option.text
+                        break
+                if selection:
+                    break
 
         if not selection:
             if self.args.server:
@@ -402,9 +614,10 @@ class HianimeExtractor:
 
             selection = server_names[
                 get_int_in_range(
-                    f"\n{Fore.LIGHTCYAN_EX}Server:{Fore.LIGHTYELLOW_EX} ",
+                    f"\n{Fore.LIGHTCYAN_EX}Server (default=1):{Fore.LIGHTYELLOW_EX} ",
                     1,
                     len(options),
+                    1
                 )
                 - 1
             ]
@@ -425,6 +638,23 @@ class HianimeExtractor:
 
         print(f"{Fore.LIGHTRED_EX}No matching server button could be found")
         return None
+    
+    def click_server_button(self, anime: Anime) -> None:
+        print(f"{Fore.LIGHTRED_EX}\nClicking server button...")
+        options = self.get_server_options(anime.download_type)
+        selection = self.args.server
+
+        for option in options:
+            if option.text == selection:
+                button: WebElement = option
+                try:
+                    button.click()
+                except Exception as e:
+                    print(
+                        f"{Fore.LIGHTRED_EX}Error clicking server button:\n\n{Fore.LIGHTWHITE_EX}{e}"
+                    )
+                    input("Please manually click the button and then press Enter to continue...")
+  
 
     def get_episode_urls(
         self, page: str, start_episode: int, end_episode: int
@@ -447,9 +677,9 @@ class HianimeExtractor:
                 episodes.append(episode_info)
         return episodes
 
-    def capture_media_requests(self) -> dict[str, str] | None:
+    def capture_media_requests(self, anime: Anime) -> dict[str, str] | None:
         found_m3u8: bool = False
-        found_vtt: bool = self.args.no_subtitles
+        found_vtt: bool = not self.args.subtitles
         attempt: int = 0
         urls: dict[str, Any] = {"all-vtt": []}
         previously_found_vtt: int = 0
@@ -457,9 +687,9 @@ class HianimeExtractor:
         all_urls = []
         while (
             not found_m3u8 or not found_vtt
-        ) and self.DOWNLOAD_ATTEMPT_CAP >= attempt:
+        ) and self.args.max_retries >= attempt:
             sys.stdout.write(
-                f"\r{Fore.CYAN}Attempt #{attempt} - {self.DOWNLOAD_ATTEMPT_CAP - attempt} Attempts Remaining"
+                f"\r{Fore.CYAN}Attempt #{attempt} - {self.args.max_retries - attempt} Attempts Remaining"
             )
             sys.stdout.flush()
 
@@ -501,7 +731,10 @@ class HianimeExtractor:
 
                     urls["all-vtt"].append(uri)
             attempt += 1
+            if attempt in self.SERVER_REFRESH:
+                self.click_server_button(anime)
             if attempt in self.DOWNLOAD_REFRESH:
+                print(f"\n{Fore.LIGHTRED_EX}Attempting page refresh..")
                 self.driver.refresh()
             time.sleep(1)
 
@@ -511,13 +744,13 @@ class HianimeExtractor:
             return None
         if not found_vtt:
             print(
-                f"\n{Fore.LIGHTRED_EX}No .vtt streams found. Check that the subtitles are not apart of the video file, option '--no-subtitles' can be used to skip downloading subtitles."
+                f"\n{Fore.LIGHTRED_EX}No .vtt streams found. Check that the subtitles are not apart of the video file, option '--subtitles' can be used to enable downloading subtitles."
             )
-            self.args.no_subtitles = get_conformation(
-                f"\n{Fore.LIGHTCYAN_EX}Would you like to skip the collection of subtiles on the following episodes (y/n): "
+            self.args.subtitles = not get_confirmation(
+                f"\n{Fore.LIGHTCYAN_EX}Would you like to skip the collection of subtitles on the following episodes (y/n): "
             )
             print()
-        elif not self.args.no_subtitles:
+        elif self.args.subtitles:
             if len(urls["all-vtt"]) == 1:
                 urls["vtt"] = urls["all-vtt"][0]
                 return urls
@@ -552,20 +785,33 @@ class HianimeExtractor:
 
         return url
 
-    def yt_dlp_download(self, url: str, headers: dict[str, str], location: str) -> bool:
+    def yt_dlp_download(self, url: str, headers: dict[str, str], location: str, episode_name: str = "") -> bool:
+        def progress_hook(d):
+            if d['status'] == 'downloading':
+                with self._progress_lock:
+                    self.download_progress[episode_name] = {
+                        "eta": d.get("eta", None)
+                    }
+            elif d['status'] == 'finished':
+                with self._progress_lock:
+                    self.download_progress[episode_name] = {
+                        "done": True
+                    }
+
         yt_dlp_options: dict[str, Any] = {
             "no_warnings": False,
-            "quiet": False,
+            "quiet": True,
             "outtmpl": location,
             "format": "best",
             "http_headers": headers,
-            "logger": YTDLogger(),
-            "fragment_retries": 10,  # Retry up to 10 times for failed fragments
+            "logger": SilentLogger(),
+            "fragment_retries": 10,
             "retries": 10,
             "socket_timeout": 60,
             "sleep_interval_requests": 1,
             "force_keyframes_at_cuts": True,
             "allow_unplayable_formats": True,
+            "progress_hooks": [progress_hook],
         }
 
         _return = True
