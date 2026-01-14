@@ -1,0 +1,15 @@
+{
+  "subtitles": true,
+  "output_dir": "output",
+  "movie_output_dir": "movies",
+  "ova_output_dir": "OVAs",
+  "aria": false,
+  "server": null,
+  "default_server": ["HD-1", "HD-2", "HD-3"],
+  "default_download_type": null,
+  "max_retries": 60,
+  "json_file": null,
+  "is_movie": false,
+  "is_ova": false,
+  "srt_format": false
+}

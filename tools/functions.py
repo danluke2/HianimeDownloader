@@ -1,5 +1,47 @@
 import os
 import time
+import webvtt
+
+
+def vtt_to_srt(vtt_file: str, srt_file: str | None = None) -> str:
+    """
+    Convert a VTT subtitle file to SRT format.
+    
+    Args:
+        vtt_file: Path to the input VTT file
+        srt_file: Path to the output SRT file (optional, defaults to same name with .srt extension)
+    
+    Returns:
+        Path to the created SRT file
+    """
+    if srt_file is None:
+        srt_file = os.path.splitext(vtt_file)[0] + ".srt"
+    
+    # Read VTT file
+    vtt = webvtt.read(vtt_file)
+    
+    # Convert to SRT format
+    srt_lines = []
+    for i, caption in enumerate(vtt, start=1):
+        # Add sequence number
+        srt_lines.append(str(i))
+        
+        # Convert timestamp format from 00:00:00.000 to 00:00:00,000
+        start_time = caption.start.replace(".", ",")
+        end_time = caption.end.replace(".", ",")
+        srt_lines.append(f"{start_time} --> {end_time}")
+        
+        # Add caption text (webvtt already handles cleaning tags)
+        srt_lines.append(caption.text)
+        
+        # Add blank line between captions
+        srt_lines.append("")
+    
+    # Write SRT file
+    with open(srt_file, "w", encoding="utf-8") as f:
+        f.write("\n".join(srt_lines))
+    
+    return srt_file
 
 
 def get_confirmation(prompt: str) -> bool:

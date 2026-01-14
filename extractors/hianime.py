@@ -23,7 +23,7 @@ from selenium_stealth import stealth
 from seleniumwire import webdriver
 from yt_dlp import YoutubeDL
 
-from tools.functions import get_confirmation, get_int_in_range, safe_remove
+from tools.functions import get_confirmation, get_int_in_range, safe_remove, vtt_to_srt
 # from tools.YTDLogger import YTDLogger
 
 
@@ -168,8 +168,14 @@ class HianimeExtractor:
             + Fore.LIGHTCYAN_EX
         )
 
+        # Determine download type based on availability and default preference
         if anime.sub_episodes != 0 and anime.dub_episodes != 0:
-            anime.download_type = self.get_download_type()
+            # Both available - use default if set and valid, otherwise ask
+            if self.args.default_download_type and self.args.default_download_type.lower() in ["sub", "dub"]:
+                print(f"Using default download type of {self.args.default_download_type.lower()}.")
+                anime.download_type = self.args.default_download_type.lower()
+            else:
+                anime.download_type = self.get_download_type()
         elif anime.dub_episodes == 0:
             print("Dub episodes are not available. Defaulting to sub.")
             anime.download_type = "sub"
@@ -178,8 +184,8 @@ class HianimeExtractor:
             anime.download_type = "dub"
         
         # if dub is chosen, ask if subtitles are wanted
-        if anime.download_type == "dub" and not self.args.no_subtitles:
-            self.args.no_subtitles = input(f"{Fore.LIGHTCYAN_EX}Do you want to download subtitles for the dub? (y/n):{Fore.LIGHTYELLOW_EX} ").strip().lower() == "n"
+        if anime.download_type == "dub" and self.args.subtitles:
+            self.args.subtitles = input(f"{Fore.LIGHTCYAN_EX}Do you want to download subtitles for the dub? (y/n):{Fore.LIGHTYELLOW_EX} ").strip().lower() == "y"
 
         number_of_episodes = getattr(anime, f"{anime.download_type}_episodes")
         if number_of_episodes != 1:
@@ -275,10 +281,10 @@ class HianimeExtractor:
                 if not media_requests:
                     print("No m3u8 file was found skipping download")
                     continue
-
+                
                 episode.update(media_requests)
                 self.captured_video_urls.append(media_requests["m3u8"])
-                if not self.args.no_subtitles:
+                if self.args.subtitles:
                     self.captured_subtitle_urls.append(media_requests["vtt"])
 
                 # Have episode URL now, so kick off thread to download it
@@ -309,10 +315,10 @@ class HianimeExtractor:
                     t.join()
                     threads.remove(t)
             alive_count = len(threads)
-            eta_min = max_eta // 60
-            eta_sec = max_eta % 60
-            eta_str = f"{int(eta_min)}m {int(eta_sec)}s"
-            print(f"{Fore.LIGHTCYAN_EX}Download threads still running: {alive_count}, Max Episode ETA: {eta_str}", end="\r")
+            eta_min = int(max_eta // 60)
+            eta_sec = int(max_eta % 60)
+            eta_str = f"{eta_min}m {eta_sec}s"
+            print(f"{Fore.LIGHTCYAN_EX}Downloads in progress: {alive_count}, Max Episode ETA: {eta_str}".ljust(80), end="\r")
             if alive_count == 0:
                 break
             time.sleep(10)
@@ -323,11 +329,21 @@ class HianimeExtractor:
 
     #function to create anime folder for storing downloads
     def create_anime_folder(self, anime: Anime) -> str:
+        # Only include download type in folder name if it differs from default
+        type_suffix = ""
+        if self.args.default_download_type:
+            if anime.download_type.lower() != self.args.default_download_type.lower():
+                type_suffix = f" ({anime.download_type[0].upper()}{anime.download_type[1:]})"
+        else:
+            # If no default is set, always include the type
+            type_suffix = f" ({anime.download_type[0].upper()}{anime.download_type[1:]})"
+        
         folder = (
             os.path.abspath(self.args.output_dir)
             + os.sep
             + anime.name
-            + f" ({anime.download_type[0].upper()}{anime.download_type[1:]}){os.sep}"
+            + type_suffix
+            + os.sep
         )
         os.makedirs(folder, exist_ok=True)
         return folder
@@ -371,10 +387,10 @@ class HianimeExtractor:
                     t.join()
                     threads.remove(t)
             alive_count = len(threads)
-            eta_min = max_eta // 60
-            eta_sec = max_eta % 60
-            eta_str = f"{int(eta_min)}m {int(eta_sec)}s"
-            print(f"{Fore.LIGHTCYAN_EX}Download threads still running: {alive_count}, Max Episode ETA: {eta_str}", end="\r")
+            eta_min = int(max_eta // 60)
+            eta_sec = int(max_eta % 60)
+            eta_str = f"{eta_min}m {eta_sec}s"
+            print(f"{Fore.LIGHTCYAN_EX}Download threads still running: {alive_count}, Max Episode ETA: {eta_str}".ljust(80), end="\r")
             if alive_count == 0:
                 break
             time.sleep(10)
@@ -414,10 +430,20 @@ class HianimeExtractor:
             return
 
         if "vtt" in episode.keys() and episode["vtt"]:
+            vtt_path = f"{folder}{name}.vtt"
             self.yt_dlp_download(
-                episode["vtt"], episode["headers"], f"{folder}{name}.vtt"
+                episode["vtt"], episode["headers"], vtt_path
             )
-        elif not self.args.no_subtitles:
+            
+            # Convert to SRT if requested
+            if self.args.srt_format:
+                try:
+                    srt_path = vtt_to_srt(vtt_path)
+                    safe_remove(vtt_path)  # Remove VTT file after conversion
+                    print(f"{Fore.LIGHTGREEN_EX}Converted to {os.path.basename(srt_path)}")
+                except Exception as e:
+                    print(f"{Fore.LIGHTRED_EX}Error converting {name}.vtt to SRT: {e}")
+        elif self.args.subtitles:
             print(f"Skipping {name}.vtt (No VTT Stream Found)")
 
 
@@ -551,10 +577,23 @@ class HianimeExtractor:
         options = self.get_server_options(anime.download_type)
         selection = None
 
+        # Try command line server argument first
         if self.args.server:
             for option in options:
                 if option.text.lower().strip() == self.args.server.lower().strip():
                     selection = option.text
+
+        # Try default_server list from config if no selection yet
+        if not selection and hasattr(self.args, 'default_server') and self.args.default_server:
+            # Handle both string and list formats
+            default_servers = self.args.default_server if isinstance(self.args.default_server, list) else [self.args.default_server]
+            for default_srv in default_servers:
+                for option in options:
+                    if option.text.lower().strip() == default_srv.lower().strip():
+                        selection = option.text
+                        break
+                if selection:
+                    break
 
         if not selection:
             if self.args.server:
@@ -640,7 +679,7 @@ class HianimeExtractor:
 
     def capture_media_requests(self, anime: Anime) -> dict[str, str] | None:
         found_m3u8: bool = False
-        found_vtt: bool = self.args.no_subtitles
+        found_vtt: bool = not self.args.subtitles
         attempt: int = 0
         urls: dict[str, Any] = {"all-vtt": []}
         previously_found_vtt: int = 0
@@ -705,13 +744,13 @@ class HianimeExtractor:
             return None
         if not found_vtt:
             print(
-                f"\n{Fore.LIGHTRED_EX}No .vtt streams found. Check that the subtitles are not apart of the video file, option '--no-subtitles' can be used to skip downloading subtitles."
+                f"\n{Fore.LIGHTRED_EX}No .vtt streams found. Check that the subtitles are not apart of the video file, option '--subtitles' can be used to enable downloading subtitles."
             )
-            self.args.no_subtitles = get_confirmation(
-                f"\n{Fore.LIGHTCYAN_EX}Would you like to skip the collection of subtiles on the following episodes (y/n): "
+            self.args.subtitles = not get_confirmation(
+                f"\n{Fore.LIGHTCYAN_EX}Would you like to skip the collection of subtitles on the following episodes (y/n): "
             )
             print()
-        elif not self.args.no_subtitles:
+        elif self.args.subtitles:
             if len(urls["all-vtt"]) == 1:
                 urls["vtt"] = urls["all-vtt"][0]
                 return urls
