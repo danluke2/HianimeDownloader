@@ -150,6 +150,13 @@ class Main:
         )
 
         parser.add_argument(
+            "--download-all",  
+            action="store_true", 
+            default=config.get("download_all", False), 
+            help="Download all episodes without prompting for range"
+        )
+
+        parser.add_argument(
             "--is-movie",  
             action="store_true", 
             default=config.get("is_movie", False), 

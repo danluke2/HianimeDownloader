@@ -188,7 +188,7 @@ class HianimeExtractor:
             self.args.subtitles = input(f"{Fore.LIGHTCYAN_EX}Do you want to download subtitles for the dub? (y/n):{Fore.LIGHTYELLOW_EX} ").strip().lower() == "y"
 
         number_of_episodes = getattr(anime, f"{anime.download_type}_episodes")
-        if number_of_episodes != 1:
+        if number_of_episodes != 1 and not self.args.download_all:
             start_ep = get_int_in_range(
                 f"{Fore.LIGHTCYAN_EX}Enter the starting episode number (inclusive, default=1):{Fore.LIGHTYELLOW_EX} ",
                 1,
@@ -203,7 +203,7 @@ class HianimeExtractor:
             )
         else:
             start_ep = 1
-            end_ep = 1
+            end_ep = number_of_episodes
 
         if self.args.is_ova:
             anime.season_number = 0
